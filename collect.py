@@ -49,7 +49,6 @@ def check_sensors():
 
 pipeline = rs.pipeline()
 config = rs.config()
-
 pipeline_wrapper = rs.pipeline_wrapper(pipeline)
 pipeline_profile = config.resolve(pipeline_wrapper)
 device = pipeline_profile.get_device()
@@ -57,29 +56,59 @@ print(f"{str(device.get_info(rs.camera_info.product_line))=}")
 print(f"{str(device.get_info(rs.camera_info.name))=}")
 
 
-config.enable_stream(rs.stream.color, 640, 480, rs.format.bgr8, 30)
-config.enable_stream(rs.stream.depth, 640, 480, rs.format.z16, 30)
-config.enable_stream(rs.stream.accel, rs.format.motion_xyz32f, 200)
-config.enable_stream(rs.stream.gyro, rs.format.motion_xyz32f, 200)
+# config.enable_stream(rs.stream.color, 640, 480, rs.format.bgr8, 30)
+# config.enable_stream(rs.stream.depth, 640, 480, rs.format.z16, 30)
+# config.enable_stream(rs.stream.accel, rs.format.motion_xyz32f, 200)
+# config.enable_stream(rs.stream.gyro, rs.format.motion_xyz32f, 200)
+
+imu = [ s for s in device.query_sensors() if s.get_info(rs.camera_info.name) == 'Motion Module'][0]
+rgb_camera = [ s for s in device.query_sensors() if s.get_info(rs.camera_info.name) == 'RGB Camera'][0]
+depth_camera = [ s for s in device.query_sensors() if s.get_info(rs.camera_info.name) == 'Stereo Module'][0]
+
+# For color sensor
+color_profiles = rgb_camera.get_stream_profiles()
+color_profile = next(p for p in color_profiles if 
+                     p.stream_type() == rs.stream.color and 
+                     p.format() == rs.format.bgr8 and 
+                     p.as_video_stream_profile().width() == 640 and 
+                     p.as_video_stream_profile().height() == 480 and 
+                     p.fps() == 30)
+rgb_camera.open(color_profile)
+
+# For depth sensor
+depth_profiles = depth_camera.get_stream_profiles()
+depth_profile = next(p for p in depth_profiles if 
+                     p.stream_type() == rs.stream.depth and 
+                     p.format() == rs.format.z16 and 
+                     p.as_video_stream_profile().width() == 640 and 
+                     p.as_video_stream_profile().height() == 480 and 
+                     p.fps() == 30)
+depth_camera.open(depth_profile)
+
+# For IMU (accel & gyro)
+motion_profiles = imu.get_stream_profiles()
+
+accel_profile = next(p for p in motion_profiles if 
+                     p.stream_type() == rs.stream.accel and 
+                     p.format() == rs.format.motion_xyz32f and 
+                     p.fps() == 200)
+
+gyro_profile = next(p for p in motion_profiles if 
+                    p.stream_type() == rs.stream.gyro and 
+                    p.format() == rs.format.motion_xyz32f and 
+                    p.fps() == 200)
+
+imu.open([accel_profile, gyro_profile])
+
+
 
 end_threads_event = threading.Event()
 
-T_START = time.perf_counter()
-
-# Start realsense pipeline
-pipeline.start(config)
 def realsense_listener():
-    frame_idx = 0
-
-    imu = [ s for s in device.query_sensors() if s.get_info(rs.camera_info.name) == 'Motion Module']
-    camera = [ s for s in device.query_sensors() if s.get_info(rs.camera_info.name) == 'Motion Module']
-    
-    imu_fs = csv.writer(open(IMU_FILE, 'w'), newline="")
 
     accel = []
     gyro = []
     def imu_callback(frame):
-        global accel, gyro
         stype = frame.get_profile().stream_type()
         data = frame.as_motion_frame().get_motion_data()
 
@@ -89,64 +118,35 @@ def realsense_listener():
         elif stype == rs.stream.accel:
             accel.append(sample)
 
-    imu.start(imu_callback)
+    rgb = []
+    def rgb_camera_callback(frame):
+        rgb.append({"t_h": frame.get_timestamp(), "t_s": time.perf_counter(), "data":np.asanyarray(frame.get_data())})
 
+    depth = []
+    def depth_camera_callback(frame):
+        depth.append({"t_h": frame.get_timestamp(), "t_s": time.perf_counter(), "data":np.asanyarray(frame.get_data())})
 
-    def camera_callback(frame):
-
-    rgb_frames = []
-    depth_frames = []
+    # These cameras are async by default, realsense spawns internal threads
+    imu.start(imu_callback) # They also have some kind of syncer object
+    rgb_camera.start(rgb_camera_callback)
+    depth_camera.start(depth_camera_callback)
 
     global end_threads_event
     while not end_threads_event.is_set():
-        # Create a pipeline object. This object configures the streaming camera and owns it's handle
+        continue
+    
+    # With I/O, is it best to sleep the thread or run it in a loop, I can't remember?
+    # I think its that you sleep, and only wake up when there is data in your buffer.
 
-        # is motion frame is inclusive of gyro and accel
-        # The way I have configured it, gyro and accel are synced.
+    imu.stop()
+    rgb_camera.stop()
+    depth_camera.stop()
 
+    print(accel)
+    print(gyro)
+    print(rgb)
 
-        print()
-         # pipeline.wait_for_frames batches imu and gyro frames with camera depth frames
-        for frame in pipeline.wait_for_frames():
-            # print(frame.profile.as_stream_profile)
-
-            frame_type = frame.get_profile().stream_type()
-            print(frame_type)
-            # print(frame.data)
-
-            # # if frame_type == rs.stream.color:
-                
-            # # elif frame_type == rs.stream.depth: # never runs
-
-            # elif frame_type == rs.stream.accel:
-                
-            # elif frame_type == rs.stream.gyro:
-
-
-
-
-        # print(frames)
-
-        # rgb_frame = frames.get_color_frame()
-        # depth_frame = frames.get_depth_frame()
-
-        # depth_image = np.asanyarray(depth_frame.get_data())
-        # color_image = np.asanyarray(rgb_frame.get_data())
-
-        # # Save images to directory
-        # cv2.imwrite(CAM_DIR+f"depth_{frame_idx}.png", depth_image)
-        # cv2.imwrite(CAM_DIR+f"color_{frame_idx}.png", color_image)
-
-
-        # accel = frames.first_or_default(rs.stream.accel)
-        # gyro = frames.first_or_default(rs.stream.gyro)
-
-        frame_idx += 1
-
-    pipeline.stop()
     exit()
-
-
 
 
 # TAG_PORT = '/dev/ttyX'
@@ -173,10 +173,14 @@ def on_interrupt(sig, frame):
 if __name__ == "__main__":
     signal.signal(signal.SIGINT, on_interrupt)
 
+    
+    T_START = time.perf_counter()
 
+    print("Starting realsense_thread")
     realsense_thread = threading.Thread(target=realsense_listener)
     realsense_thread.start()
 
+    print("Starting decawave_thread")
     decawave_thread = threading.Thread(target=decawave_listener)
     decawave_thread.start()
 
