@@ -10,6 +10,7 @@ import numpy as np
 import time
 import signal
 import csv
+import json
 from datetime import datetime
 pyd_path = "C:\\Program Files\\Intel RealSense SDK 2.0\\bin\\x64\\"
 sys.path.append(pyd_path)
@@ -64,30 +65,30 @@ depth_camera = [ s for s in device.query_sensors() if s.get_info(rs.camera_info.
 # For color sensor
 color_profiles = rgb_camera.get_stream_profiles()
 color_profile = next(p for p in color_profiles if 
-                     p.stream_type() == rs.stream.color and 
-                     p.format() == rs.format.bgr8 and 
-                     p.as_video_stream_profile().width() == 640 and 
-                     p.as_video_stream_profile().height() == 480 and 
-                     p.fps() == 30)
+                    p.stream_type() == rs.stream.color and 
+                    p.format() == rs.format.bgr8 and 
+                    p.as_video_stream_profile().width() == 640 and 
+                    p.as_video_stream_profile().height() == 480 and 
+                    p.fps() == 30)
 rgb_camera.open(color_profile)
 
 # For depth sensor
 depth_profiles = depth_camera.get_stream_profiles()
 depth_profile = next(p for p in depth_profiles if 
-                     p.stream_type() == rs.stream.depth and 
-                     p.format() == rs.format.z16 and 
-                     p.as_video_stream_profile().width() == 640 and 
-                     p.as_video_stream_profile().height() == 480 and 
-                     p.fps() == 30)
+                    p.stream_type() == rs.stream.depth and 
+                    p.format() == rs.format.z16 and 
+                    p.as_video_stream_profile().width() == 640 and 
+                    p.as_video_stream_profile().height() == 480 and 
+                    p.fps() == 30)
 depth_camera.open(depth_profile)
 
 # For IMU (accel & gyro)
 motion_profiles = imu.get_stream_profiles()
 
 accel_profile = next(p for p in motion_profiles if 
-                     p.stream_type() == rs.stream.accel and 
-                     p.format() == rs.format.motion_xyz32f and 
-                     p.fps() == 200)
+                    p.stream_type() == rs.stream.accel and 
+                    p.format() == rs.format.motion_xyz32f and 
+                    p.fps() == 200)
 
 gyro_profile = next(p for p in motion_profiles if 
                     p.stream_type() == rs.stream.gyro and 
@@ -100,10 +101,14 @@ imu.open([accel_profile, gyro_profile])
 
 end_threads_event = threading.Event()
 
-def realsense_listener():
+accel = []
+gyro = []
+rgb = []
+depth = []
 
-    accel = []
-    gyro = []
+def realsense_listener():
+    global accel, gyro, rgb, depth
+
     def imu_callback(frame):
         stype = frame.get_profile().stream_type()
         data = frame.as_motion_frame().get_motion_data()
@@ -114,11 +119,9 @@ def realsense_listener():
         elif stype == rs.stream.accel:
             accel.append(sample)
 
-    rgb = []
     def rgb_camera_callback(frame):
         rgb.append({"t_h": frame.get_timestamp(), "t_s": time.perf_counter(), "data":np.asanyarray(frame.get_data())})
 
-    depth = []
     def depth_camera_callback(frame):
         depth.append({"t_h": frame.get_timestamp(), "t_s": time.perf_counter(), "data":np.asanyarray(frame.get_data())})
 
@@ -127,18 +130,7 @@ def realsense_listener():
     imu.start(imu_callback) # They also have some kind of syncer object
     rgb_camera.start(rgb_camera_callback)
     depth_camera.start(depth_camera_callback)
-
-    global end_threads_event
-    while not end_threads_event.is_set():
-        continue
-
-    print(rgb)
-    
-    imu.stop()
-    rgb_camera.stop()
-    depth_camera.stop()
-
-    exit()
+    print(f" Realsense set up callbacks ")
 
 
 TAG_PORT = 'COM4'
@@ -149,61 +141,43 @@ def read_from_serial( ser):
 
 # Remember you need to run the AT Commands first! -> Remember I was planning to set the setup.json file to do that for me on boot
 # Need to do that before I can get them working on the wall outlets.
+uwb = []
 def decawave_listener(): # Can use the timestamp I log in decawave serial as that hardware time
     global end_threads
-
-    # Ok when I remove the kill event from the trhead
-    # then kill the main thread
-    # it runs at expected serial rate
-    # So I think it's contending with the main thread for scheduling time.
-    # I think i'm just going to run it on the main thread
-    while True:        
-        print("Loop scheduled")
+    while True:
         data = read_from_serial(TAG_SERIAL)
-        print(data)
-        # start_t = time.perf_counter()
-        if end_threads_event.is_set(): break # It seems like the end threads event takes a super long time to run?
-        # print(f" Elapsed: {time.perf_counter() - start_t}")
-        continue
+        if data is not None:
+            uwb.append({"t_s": time.perf_counter(), "data":json.loads(data)})
+        # if end_threads_event.is_set(): break # It seems like the end threads event takes a super long time to run?
+
     # while not end_threads_event.is_set(): # I think this loop runs at far too low a rate
     #     # print("uwb
     # exit()
 
 def on_interrupt(sig, frame):
     print("Interrupt")
-    global end_threads_event
-    end_threads_event.set()
-    realsense_process.join()
+
+
+    imu.stop()
+    rgb_camera.stop()
+    depth_camera.stop()
+
+    print(uwb)
+    # print(rgb)
+
     exit()
 
 if __name__ == "__main__":
+
     signal.signal(signal.SIGINT, on_interrupt)
 
-    
     T_START = time.perf_counter()
     # Realsense_HT_START = # TODO: Somehow get start time recorded on the realsense hardware.
 
-    # Replacing threads with processes solves thread blocking / scheduling issues
-    # So, while the end_threads_event.is_set() itself does not have a write lock
-    # Python Global Interpreter Lock (GIL) automatically sets a read lock on it when accessed by multiple threads
-    # My decawave thread was being blocked out of reading the is_set() lock by the realsense thread.
-    # So using a process, bypasses the GIL, and lets everything run as normal
-
-    print("Starting Realsense thread")
-    realsense_process = multiprocessing.Process(target=realsense_listener)
-    realsense_process.start()
-
+    print("Starting Realsense thread") # We specify a target, but GPT implies its a C-style process clone
+    realsense_listener() # Library implicitly spawns off 3 threads
     print("Starting Decawave thread")
-    decawave_listener()
-
-    # Need to keep main thread alive to capture ctrl c
-    # try:
-    #     while not end_threads_event.is_set():
-    #         time.sleep(0.1)
-    # except KeyboardInterrupt:
-    #     # Fallback in case signal handler didn't fire
-    #     on_interrupt(None, None)
-    #     exit()
+    decawave_listener() # Can run on main thread
 
 
 
