@@ -56,11 +56,6 @@ print(f"{str(device.get_info(rs.camera_info.product_line))=}")
 print(f"{str(device.get_info(rs.camera_info.name))=}")
 
 
-# config.enable_stream(rs.stream.color, 640, 480, rs.format.bgr8, 30)
-# config.enable_stream(rs.stream.depth, 640, 480, rs.format.z16, 30)
-# config.enable_stream(rs.stream.accel, rs.format.motion_xyz32f, 200)
-# config.enable_stream(rs.stream.gyro, rs.format.motion_xyz32f, 200)
-
 imu = [ s for s in device.query_sensors() if s.get_info(rs.camera_info.name) == 'Motion Module'][0]
 rgb_camera = [ s for s in device.query_sensors() if s.get_info(rs.camera_info.name) == 'RGB Camera'][0]
 depth_camera = [ s for s in device.query_sensors() if s.get_info(rs.camera_info.name) == 'Stereo Module'][0]
@@ -127,6 +122,7 @@ def realsense_listener():
         depth.append({"t_h": frame.get_timestamp(), "t_s": time.perf_counter(), "data":np.asanyarray(frame.get_data())})
 
     # These cameras are async by default, realsense spawns internal threads
+    # I don't even really need to be spinning off this as an extra thread in that case
     imu.start(imu_callback) # They also have some kind of syncer object
     rgb_camera.start(rgb_camera_callback)
     depth_camera.start(depth_camera_callback)
@@ -134,64 +130,76 @@ def realsense_listener():
     global end_threads_event
     while not end_threads_event.is_set():
         continue
-    
-    # With I/O, is it best to sleep the thread or run it in a loop, I can't remember?
-    # I think its that you sleep, and only wake up when there is data in your buffer.
 
     imu.stop()
     rgb_camera.stop()
     depth_camera.stop()
 
-    print(accel)
-    print(gyro)
-    print(rgb)
-
     exit()
 
 
-# TAG_PORT = '/dev/ttyX'
-# TAG_SER = serial.Serial(TAG_PORT, 115200)
-# def read_from_serial( ser):
-#     ser.reset_input_buffer()
-#     return ser.readline().decode('utf-8')
+TAG_PORT = 'COM4'
+TAG_SERIAL = serial.Serial(TAG_PORT, 115200)
+def read_from_serial( ser):
+    ser.reset_input_buffer()
+    return ser.readline().decode('utf-8')
 
-def decawave_listener():
+# Remember you need to run the AT Commands first! -> Remember I was planning to set the setup.json file to do that for me on boot
+# Need to do that before I can get them working on the wall outlets.
+def decawave_listener(): # Can use the timestamp I log in decawave serial as that hardware time
     global end_threads
-    while not end_threads_event.is_set():
-        # print("uwb")
+
+    # Ok when I remove the kill event from the trhead
+    # then kill the main thread
+    # it runs at expected serial rate
+    # So I think it's contending with the main thread for scheduling time.
+    # I think i'm just going to run it on the main thread
+    while True:        
+        print("Loop scheduled")
+        data = read_from_serial(TAG_SERIAL)
+        print(data)
+        # start_t = time.perf_counter()
+        # if end_threads_event.is_set(): break # It seems like the end threads event takes a super long time to run?
+        # print(f" Elapsed: {time.perf_counter() - start_t}")
         continue
-    exit()
+    # while not end_threads_event.is_set(): # I think this loop runs at far too low a rate
+    #     # print("uwb
+    # exit()
 
 def on_interrupt(sig, frame):
     print("Interrupt")
     global end_threads_event
     end_threads_event.set()
-
     realsense_thread.join()
-    decawave_thread.join()
+    # decawave_thread.join()
 
 if __name__ == "__main__":
     signal.signal(signal.SIGINT, on_interrupt)
 
     
     T_START = time.perf_counter()
+    # Realsense_HT_START = # TODO: Somehow get start time recorded on the realsense hardware.
 
     print("Starting realsense_thread")
     realsense_thread = threading.Thread(target=realsense_listener)
+    realsense_thread.daemon = True
     realsense_thread.start()
 
     print("Starting decawave_thread")
-    decawave_thread = threading.Thread(target=decawave_listener)
-    decawave_thread.start()
+    # decawave_thread = threading.Thread(target=decawave_listener)
+    # decawave_thread.daemon = True
+    # decawave_thread.start()
+
+    decawave_listener()
 
     # Need to keep main thread alive to capture ctrl c
-    try:
-        while not end_threads_event.is_set():
-            time.sleep(0.1)
-    except KeyboardInterrupt:
-        # Fallback in case signal handler didn't fire
-        on_interrupt(None, None)
-        exit()
+    # try:
+    #     while not end_threads_event.is_set():
+    #         time.sleep(0.1)
+    # except KeyboardInterrupt:
+    #     # Fallback in case signal handler didn't fire
+    #     on_interrupt(None, None)
+    #     exit()
 
 
 
