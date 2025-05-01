@@ -3,6 +3,7 @@ import sys
 import os
 import argparse
 import threading
+import multiprocessing
 import serial
 import cv2
 import numpy as np
@@ -131,6 +132,8 @@ def realsense_listener():
     while not end_threads_event.is_set():
         continue
 
+    print(rgb)
+    
     imu.stop()
     rgb_camera.stop()
     depth_camera.stop()
@@ -159,7 +162,7 @@ def decawave_listener(): # Can use the timestamp I log in decawave serial as tha
         data = read_from_serial(TAG_SERIAL)
         print(data)
         # start_t = time.perf_counter()
-        # if end_threads_event.is_set(): break # It seems like the end threads event takes a super long time to run?
+        if end_threads_event.is_set(): break # It seems like the end threads event takes a super long time to run?
         # print(f" Elapsed: {time.perf_counter() - start_t}")
         continue
     # while not end_threads_event.is_set(): # I think this loop runs at far too low a rate
@@ -170,8 +173,8 @@ def on_interrupt(sig, frame):
     print("Interrupt")
     global end_threads_event
     end_threads_event.set()
-    realsense_thread.join()
-    # decawave_thread.join()
+    realsense_process.join()
+    exit()
 
 if __name__ == "__main__":
     signal.signal(signal.SIGINT, on_interrupt)
@@ -180,16 +183,17 @@ if __name__ == "__main__":
     T_START = time.perf_counter()
     # Realsense_HT_START = # TODO: Somehow get start time recorded on the realsense hardware.
 
-    print("Starting realsense_thread")
-    realsense_thread = threading.Thread(target=realsense_listener)
-    realsense_thread.daemon = True
-    realsense_thread.start()
+    # Replacing threads with processes solves thread blocking / scheduling issues
+    # So, while the end_threads_event.is_set() itself does not have a write lock
+    # Python Global Interpreter Lock (GIL) automatically sets a read lock on it when accessed by multiple threads
+    # My decawave thread was being blocked out of reading the is_set() lock by the realsense thread.
+    # So using a process, bypasses the GIL, and lets everything run as normal
 
-    print("Starting decawave_thread")
-    # decawave_thread = threading.Thread(target=decawave_listener)
-    # decawave_thread.daemon = True
-    # decawave_thread.start()
+    print("Starting Realsense thread")
+    realsense_process = multiprocessing.Process(target=realsense_listener)
+    realsense_process.start()
 
+    print("Starting Decawave thread")
     decawave_listener()
 
     # Need to keep main thread alive to capture ctrl c
