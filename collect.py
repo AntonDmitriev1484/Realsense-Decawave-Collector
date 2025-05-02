@@ -133,7 +133,8 @@ def realsense_listener():
         depth.append({"t_dev": frame.get_timestamp(), "t_host": host_timestamp(), "data":np.asanyarray(frame.get_data())})
     
     print(f"Realsense set up callbacks ")
-    # start_collection.wait()
+
+    start_collection.wait()
     
     imu.start(imu_callback)
     rgb_camera.start(rgb_camera_callback)
@@ -157,11 +158,10 @@ uwb = []
 deca_time = []
 def decawave_listener(): # Can use the timestamp I log in decawave serial as that hardware time
     global end_threads
-
     ht_query_limit = 5 # Very laggy with a query limit of 5
     range_counter = 0
 
-    # start_collection.wait()
+    start_collection.wait()
 
     fetch_decawave_time()
     while True:
@@ -228,7 +228,8 @@ def on_interrupt(sig, frame):
     imu.stop()
     rgb_camera.stop()
     depth_camera.stop()
-    # print(rgb)
+    realsense_process.kill()
+    realsense_process.close()
 
     exit()
 
@@ -238,13 +239,16 @@ if __name__ == "__main__":
 
 
     print("Starting Realsense thread") 
-    realsense_listener() # Library implicitly spawns off 3 threads
+    realsense_process = multiprocessing.Process(target=realsense_listener) 
+    # Problem, a process is a full process clone; and changes data arrays in its own memory -> Can't use threads because GIL
+    realsense_process.start()
+
+    time.sleep(0.1)
+    start_collection.set() # Goal: Start both data collection threads off at the same time. 
+
     print("Starting Decawave thread")
     decawave_listener() # Can run on main thread
 
-    # time.sleep(0.1)
-    # start_collection.set() # Goal: Start both data collection off at same time. 
-    # Problem they decawave and realsense need to be running on independent threads for this to properly sync up the start.
 
 
 
