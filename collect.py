@@ -11,7 +11,11 @@ import time
 import signal
 import csv
 import json
+import re
+
+import matplotlib.pyplot as plt
 from datetime import datetime
+
 pyd_path = "C:\\Program Files\\Intel RealSense SDK 2.0\\bin\\x64\\"
 sys.path.append(pyd_path)
 import pyrealsense2 as rs
@@ -45,8 +49,10 @@ def check_sensors():
     sensors = device.query_sensors()
     for sensor in sensors:
         print(f"Sensor: {sensor.get_info(rs.camera_info.name)}")
-        for p in sensor.get_stream_profiles():
+        for p in sensor.get_hosttream_profiles():
             print(f"  {p.stream_type()}, {p.format()}, {p.fps()} fps")
+
+def host_timestamp(): return time.perf_counter_ns() / 1e6 # Return host time in ms.
 
 
 pipeline = rs.pipeline()
@@ -99,6 +105,7 @@ imu.open([accel_profile, gyro_profile])
 
 
 
+start_collection = threading.Event()
 end_threads_event = threading.Event()
 
 accel = []
@@ -113,24 +120,25 @@ def realsense_listener():
         stype = frame.get_profile().stream_type()
         data = frame.as_motion_frame().get_motion_data()
 
-        sample = {"t_h": frame.get_timestamp(), "t_s": time.perf_counter(), "data":(data.x, data.y, data.z)}
+        sample = {"t_dev": frame.get_timestamp(), "t_host": host_timestamp(), "data":(data.x, data.y, data.z)}
         if stype == rs.stream.gyro:
             gyro.append(sample)
         elif stype == rs.stream.accel:
             accel.append(sample)
 
     def rgb_camera_callback(frame):
-        rgb.append({"t_h": frame.get_timestamp(), "t_s": time.perf_counter(), "data":np.asanyarray(frame.get_data())})
+        rgb.append({"t_dev": frame.get_timestamp(), "t_host": host_timestamp(), "data":np.asanyarray(frame.get_data())})
 
     def depth_camera_callback(frame):
-        depth.append({"t_h": frame.get_timestamp(), "t_s": time.perf_counter(), "data":np.asanyarray(frame.get_data())})
-
-    # These cameras are async by default, realsense spawns internal threads
-    # I don't even really need to be spinning off this as an extra thread in that case
-    imu.start(imu_callback) # They also have some kind of syncer object
+        depth.append({"t_dev": frame.get_timestamp(), "t_host": host_timestamp(), "data":np.asanyarray(frame.get_data())})
+    
+    print(f"Realsense set up callbacks ")
+    # start_collection.wait()
+    
+    imu.start(imu_callback)
     rgb_camera.start(rgb_camera_callback)
     depth_camera.start(depth_camera_callback)
-    print(f" Realsense set up callbacks ")
+    print(f"Realsense started collection")
 
 
 TAG_PORT = 'COM4'
@@ -139,30 +147,87 @@ def read_from_serial( ser):
     ser.reset_input_buffer()
     return ser.readline().decode('utf-8')
 
-# Remember you need to run the AT Commands first! -> Remember I was planning to set the setup.json file to do that for me on boot
-# Need to do that before I can get them working on the wall outlets.
+def write_to_serial(ser, str):
+    ser.write((str+"\n").encode('utf-8'))
+
+def fetch_decawave_time(): write_to_serial(TAG_SERIAL, "AT+TIME") # Issue command to get hardware timestamp
+
+
 uwb = []
+deca_time = []
 def decawave_listener(): # Can use the timestamp I log in decawave serial as that hardware time
     global end_threads
-    while True:
-        data = read_from_serial(TAG_SERIAL)
-        if data is not None:
-            uwb.append({"t_s": time.perf_counter(), "data":json.loads(data)})
-        # if end_threads_event.is_set(): break # It seems like the end threads event takes a super long time to run?
 
-    # while not end_threads_event.is_set(): # I think this loop runs at far too low a rate
-    #     # print("uwb
-    # exit()
+    ht_query_limit = 5 # Very laggy with a query limit of 5
+    range_counter = 0
+
+    # start_collection.wait()
+
+    fetch_decawave_time()
+    while True:
+        line = read_from_serial(TAG_SERIAL)
+
+        if line is not None:
+            if "{" in line and "}" in line: 
+                print(line)
+                uwb.append({"t_host": host_timestamp(), "data":json.loads(line)})
+                range_counter += 1
+            elif "Time:" in line:
+                # deca_time.append({"t_host": time.perf_counter(), "t_dev": int(line.split()[1]) })
+                match = re.search(r'\d+', line)
+                if match:
+                    deca_time.append({"t_dev": int(match.group()), "t_host": host_timestamp()})
+
+
+        if range_counter > ht_query_limit:  
+            fetch_decawave_time()
+
 
 def on_interrupt(sig, frame):
     print("Interrupt")
+
+    # They seem off by around 40ms, it might take the Realsense threads a few seconds to boot.
+    # Set a timer, and make sure data collection on all threads only begins when that timer expires
+    # This should align the host start timestamps even enough
+
+    # Even though the timestamps are unaligned, for now, we will treat the decawave as the HOST Start
+    HOST_START = deca_time[0]["t_host"]
+    DECAWAVE_START = deca_time[0]["t_dev"]
+    REALSENSE_START = accel[0]["t_dev"]
+
+    host_ts = []
+    decawave_ts = []
+    realsense_ts = []
+
+    # Currently the start timestamps are a little unsynced (40ms), we will treat the decawave host timestamp start
+    # TODO: Plotting to see any clock drift
+    # x-axis software timestamp
+    # y-axis decawave or realsense
+    for d in deca_time:
+        decawave_ts.append(d["t_dev"] - DECAWAVE_START)
+        host_ts.append(d["t_host"] - HOST_START)
+    
+    for r in accel:
+        realsense_ts.append(r["t_dev"] - REALSENSE_START)
+
+    # print(host_ts)
+    # print(f"{max(host_ts)=}")
+    ts_x = np.linspace(0, max(host_ts), int(max(host_ts)))
+
+    plt.title(" Hardware (Decawave, Realsense IMU) Timestamps vs Host Timestamps")
+    plt.plot( realsense_ts, label='Realsense IMU')
+    plt.plot( decawave_ts, label='Decawave')
+    plt.plot( host_ts, label='Host')
+
+    plt.xlim((0, max(host_ts)))
+    plt.legend()
+
+    plt.show()
 
 
     imu.stop()
     rgb_camera.stop()
     depth_camera.stop()
-
-    print(uwb)
     # print(rgb)
 
     exit()
@@ -171,13 +236,15 @@ if __name__ == "__main__":
 
     signal.signal(signal.SIGINT, on_interrupt)
 
-    T_START = time.perf_counter()
-    # Realsense_HT_START = # TODO: Somehow get start time recorded on the realsense hardware.
 
-    print("Starting Realsense thread") # We specify a target, but GPT implies its a C-style process clone
+    print("Starting Realsense thread") 
     realsense_listener() # Library implicitly spawns off 3 threads
     print("Starting Decawave thread")
     decawave_listener() # Can run on main thread
+
+    # time.sleep(0.1)
+    # start_collection.set() # Goal: Start both data collection off at same time. 
+    # Problem they decawave and realsense need to be running on independent threads for this to properly sync up the start.
 
 
 
