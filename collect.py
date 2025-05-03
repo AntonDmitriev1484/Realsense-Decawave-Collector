@@ -158,7 +158,8 @@ uwb = []
 deca_time = []
 def decawave_listener(): # Can use the timestamp I log in decawave serial as that hardware time
     global end_threads
-    ht_query_limit = 5 # Very laggy with a query limit of 5
+
+    ht_query_limit = 50 # Very laggy with a query limit of 5
     range_counter = 0
 
     start_collection.wait()
@@ -195,8 +196,9 @@ def on_interrupt(sig, frame):
     DECAWAVE_START = deca_time[0]["t_dev"]
     REALSENSE_START = accel[0]["t_dev"]
 
-    host_ts = []
+    decawave_host_ts = []
     decawave_ts = []
+    realsense_host_ts = []
     realsense_ts = []
 
     # Currently the start timestamps are a little unsynced (40ms), we will treat the decawave host timestamp start
@@ -205,21 +207,19 @@ def on_interrupt(sig, frame):
     # y-axis decawave or realsense
     for d in deca_time:
         decawave_ts.append(d["t_dev"] - DECAWAVE_START)
-        host_ts.append(d["t_host"] - HOST_START)
+        decawave_host_ts.append(d["t_host"] - HOST_START)
     
     for r in accel:
         realsense_ts.append(r["t_dev"] - REALSENSE_START)
+        realsense_host_ts.append(r["t_host"] - HOST_START)
 
-    # print(host_ts)
-    # print(f"{max(host_ts)=}")
-    ts_x = np.linspace(0, max(host_ts), int(max(host_ts)))
 
     plt.title(" Hardware (Decawave, Realsense IMU) Timestamps vs Host Timestamps")
-    plt.plot( realsense_ts, label='Realsense IMU')
-    plt.plot( decawave_ts, label='Decawave')
-    plt.plot( host_ts, label='Host')
+    plt.plot( realsense_host_ts, realsense_ts, label='Realsense IMU')
+    plt.plot( decawave_host_ts, decawave_ts, label='Decawave')
 
-    plt.xlim((0, max(host_ts)))
+    plt.xlabel("Host Timestamp")
+    plt.ylabel("Hardware Timestamp")
     plt.legend()
 
     plt.show()
