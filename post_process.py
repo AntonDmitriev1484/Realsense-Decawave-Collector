@@ -166,7 +166,43 @@ def postprocess_data():
     print(imu_arr[-1])
     print(imu_arr[0])
 
+    
+    WRITE_DATA_DIR = f"./data/{args.trial_name}/"
+    FULL_STREAM = WRITE_DATA_DIR+"all.json" # Write one file that's all sensors merged into one stream chronologically.
+    WRITE_RGB_DIR = WRITE_DATA_DIR + "rgb/"
+    try: os.makedirs(WRITE_DATA_DIR, exist_ok=True)
+    except OSError as e: print(e)
 
-   
+    try: os.makedirs(WRITE_RGB_DIR, exist_ok=True)
+    except OSError as e: print(e)
+
+    # try: os.makedirs(DEPTH_DIR, exist_ok=True)
+    # except OSError as e: print(e)
+
+    # Convert all arrays to json format
+
+    imu_json_write = []
+    for row in range(imu_arr.shape[0]):
+        imu_json_write.append({ "t":float(imu_arr[row, 1]), "ax": imu_arr[row, 2], "ay": imu_arr[row, 3], "az":imu_arr[row, 4], "gx": imu_arr[row, 5], "gy": imu_arr[row, 6], "gz": imu_arr[row, 7]})
+
+    np.savetxt(WRITE_DATA_DIR+"/imu.csv", imu_arr, delimiter=",", fmt="%.6f") # Save IMU separately as a CSV file
+
+    rgb_json_write = []
+    for frame in rgb:
+        cv2.imwrite(WRITE_RGB_DIR+str(frame["t_dev"])+".png", np.asanyarray(frame["array"]))
+        rgb_json_write.append({"t":float(frame["t_dev"]), "name":str(frame["t_dev"])+".png"})
+
+    uwb_json_write = []
+    for u in uwb:
+        dat = u["data"]
+        out_json = {"t": float(u["t_dev"])}
+        for k, v in dat.items():
+            out_json[k] = v
+        uwb_json_write.append( out_json )
+
+    ultra_json = sorted( imu_json_write + uwb_json_write + rgb_json_write, key=lambda x: x["t"] ) # Sort by timestamp
+
+    json.dump(ultra_json, open(FULL_STREAM, 'w'))
+
 
 postprocess_data()
