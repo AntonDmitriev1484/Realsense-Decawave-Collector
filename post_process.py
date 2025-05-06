@@ -130,7 +130,7 @@ def postprocess_data():
     m, b = np.polyfit(decawave_ts[:,0], decawave_ts[:,1], 1)
     print(f" UWB = {m}")
 
-
+    # Align Accelerometer and Gyroscope measurements into a single 'IMU' data array
     imu = []
     for g_idx in range(gyro_arr.shape[0]):
         # find the nearest accelerometer hardware timestamp, to each gyro.
@@ -139,9 +139,32 @@ def postprocess_data():
         row = np.concat((accel_arr[near_idx, :], gyro_arr[g_idx, 2:]), axis = 0)
         # Append the gx, gy, gz values to the acceleration we've selected
         imu.append(row)
-    
-    print(imu[-1])
 
+    np.set_printoptions(suppress=True)
+
+    imu_arr = np.array(imu)
+    print(imu_arr[-1])
+
+    # Compensate for drift by mutating t_dev, we will log events according to t_dev timestamps
+    
+    drift = {"imu": None, "rgb": None, "uwb": None}
+
+    for key, arr in [("imu", imu_arr), ("rgb", realsense_ts), ("uwb", decawave_ts)]:
+        drift[key] = np.polyfit(arr[:,0], arr[:,1], 1)
+    
+    for i in range(imu_arr.shape[0]):
+        # imu_arr[i, 1] = imu_arr[i, 0] + drift["imu"][1] # Do T_dev_true_ = (T_dev - b)/m
+        imu_arr[i,1] = (imu_arr[i,1] - drift["imu"][1]) / drift["imu"][0]
+
+    for i in range(decawave_ts.shape[0]):
+        # uwb[i]["t_dev"] = decawave_ts[i, 0] + drift["uwb"][1] # modify the original json array, leave the timestamp array alone
+        uwb[i]["t_dev"] = (uwb[i]["t_dev"] - drift["uwb"][1]) / drift["uwb"][0]
+
+    for i in range(realsense_ts.shape[0]):
+        rgb[i]["t_dev"] = (rgb[i]["t_dev"] - drift["rgb"][1]) / drift["rgb"][0]
+
+    print(imu_arr[-1])
+    print(imu_arr[0])
 
 
    
