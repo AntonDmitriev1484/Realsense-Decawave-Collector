@@ -91,6 +91,11 @@ def postprocess_data():
             a["t_host"] -= HOST_START
             a["t_dev"] -= DECAWAVE_START
 
+    # I feel like this loop is not working the way it should...
+    # Hence why I'm getting negative timestamp
+    print(f" Starting host timestamps {[ s[0]['t_host'] for s in sensor_streams]}")
+    print(f" Starting dev timestamps {[ s[0]['t_dev'] for s in sensor_streams]}") 
+
     decawave_ts = []
     accel_arr = []
     gyro_arr = []
@@ -153,15 +158,21 @@ def postprocess_data():
         drift[key] = np.polyfit(arr[:,0], arr[:,1], 1)
     
     for i in range(imu_arr.shape[0]):
-        # imu_arr[i, 1] = imu_arr[i, 0] + drift["imu"][1] # Do T_dev_true_ = (T_dev - b)/m
-        imu_arr[i,1] = (imu_arr[i,1] - drift["imu"][1]) / drift["imu"][0]
+        # imu_arr[i, 1] = imu_arr[i, 0] + drift["imu"][1] 
+        # # Do T_dev_true_ = (T_dev - b)/m
+        # imu_arr[i,1] = (imu_arr[i,1] - drift["imu"][1]) / drift["imu"][0]
+        imu_arr[i,1] = imu_arr[i,0]
 
     for i in range(decawave_ts.shape[0]):
         # uwb[i]["t_dev"] = decawave_ts[i, 0] + drift["uwb"][1] # modify the original json array, leave the timestamp array alone
-        uwb[i]["t_dev"] = (uwb[i]["t_dev"] - drift["uwb"][1]) / drift["uwb"][0]
+        # uwb[i]["t_dev"] = (uwb[i]["t_dev"] - drift["uwb"][1]) / drift["uwb"][0]
+        uwb[i]["t_dev"] = uwb[i]["t_host"]
 
     for i in range(realsense_ts.shape[0]):
-        rgb[i]["t_dev"] = (rgb[i]["t_dev"] - drift["rgb"][1]) / drift["rgb"][0]
+        # rgb[i]["t_dev"] = (rgb[i]["t_dev"] - drift["rgb"][1]) / drift["rgb"][0]
+        rgb[i]["t_dev"] = rgb[i]["t_host"]
+
+    # Since I am stupid, for now I think the best bet is to just set device to be host timestamps
 
     print(imu_arr[-1])
     print(imu_arr[0])
@@ -203,6 +214,8 @@ def postprocess_data():
     ultra_json = sorted( imu_json_write + uwb_json_write + rgb_json_write, key=lambda x: x["t"] ) # Sort by timestamp
 
     json.dump(ultra_json, open(FULL_STREAM, 'w'))
+
+    # TODO: Fix the negative timestamp garbage I'm doing
 
 
 postprocess_data()

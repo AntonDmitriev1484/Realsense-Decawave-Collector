@@ -227,7 +227,7 @@ if __name__ == "__main__":
             line = read_from_serial(TAG_SERIAL)
             if line is not None:
                 if "{" in line and "}" in line: 
-                    # print(line)
+                    print(line)
                     if len(deca_time) > 0:
                         estimated_t_dev = (host_timestamp() - deca_time[-1]["t_host"]) + deca_time[-1]["t_dev"]
                         uwb.append({"t_dev": estimated_t_dev, "t_host": host_timestamp(), "data":json.loads(line)})
@@ -242,7 +242,7 @@ if __name__ == "__main__":
                 fetch_decawave_time(TAG_SERIAL)
                 range_counter = 0
 
-            if time.perf_counter() - START_T > 120: break
+            if time.perf_counter() - START_T > 30: break
         return
 
     START_T = time.perf_counter()
